@@ -614,39 +614,54 @@
         const txUrl = `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${encodeURIComponent(season)}/segments/0/leagues/${encodeURIComponent(leagueId)}?scoringPeriodId=${week}&view=mTransactions2`;
         const newsUrl = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/news?limit=25';
 
-        const fetchWithTimeout = (url, ms = 6000) => {
+        const fetchWithTimeout = (url, ms = 7000) => {
           const ctrl = new AbortController();
           const t = setTimeout(() => ctrl.abort(), ms);
-          return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+          return fetch(url, { signal: ctrl.signal, cache: 'no-store' }).finally(() => clearTimeout(t));
+        };
+
+        const fetchJsonSmart = async (targetUrl, ms = 7000) => {
+          const sep = targetUrl.includes('?') ? '&' : '?';
+          const busted = `${targetUrl}${sep}_cb=${Date.now()}`;
+          const candidates = [
+            busted,
+            `https://api.allorigins.win/raw?url=${encodeURIComponent(busted)}`,
+            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(busted)}`
+          ];
+          let lastErr = null;
+          for (const url of candidates) {
+            try {
+              const res = await fetchWithTimeout(url, ms);
+              if (!res.ok) {
+                lastErr = new Error(`HTTP ${res.status}`);
+                continue;
+              }
+              const data = await res.json();
+              if (data && typeof data === 'object') return data;
+            } catch (err) {
+              lastErr = err;
+            }
+          }
+          throw lastErr || new Error('Unable to reach ESPN API.');
         };
 
         try {
-          const newsRes = await fetchWithTimeout(newsUrl, 5000);
-          if (newsRes.ok) {
-            const newsJson = await newsRes.json();
-            state.nflNews = Array.isArray(newsJson.articles) ? newsJson.articles : [];
-          }
+          const newsJson = await fetchJsonSmart(newsUrl, 6000);
+          state.nflNews = Array.isArray(newsJson.articles) ? newsJson.articles : [];
         } catch (e) {
           state.nflNews = [];
         }
 
         try {
-          const res = await fetchWithTimeout(leagueUrl, 6000);
-          if (!res.ok) {
-            throw new Error(`ESPN API returned HTTP ${res.status}. Make sure the league is set to Public.`);
-          }
-          const json = await res.json();
+          const json = await fetchJsonSmart(leagueUrl, 8000);
           if (!json || !Array.isArray(json.teams)) {
-            throw new Error('League response did not include team data.');
+            throw new Error('League response did not include team data. Make sure the league is set to Public.');
           }
 
           let transactions = [];
           try {
-            const txRes = await fetchWithTimeout(txUrl, 5000);
-            if (txRes.ok) {
-              const txJson = await txRes.json();
-              if (Array.isArray(txJson.transactions)) transactions = txJson.transactions;
-            }
+            const txJson = await fetchJsonSmart(txUrl, 6000);
+            if (Array.isArray(txJson.transactions)) transactions = txJson.transactions;
           } catch (e) { /* optional */ }
 
           json.transactions = transactions;
